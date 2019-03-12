@@ -62,6 +62,27 @@ class TestToLaplace(unittest.TestCase):
 
         self.assertTrue(np.allclose(L_normed, expected_L_normed, rtol=1e-04))
 
+    def test_to_laplace_RDAD(self):
+        expected_L_normed = [
+            [0, 3 / sqrt(70), 0],
+            [3 / sqrt(70), 0, 3 / sqrt(70)],
+            [0, 3 / sqrt(70), 0],
+        ]
+
+        L_normed = gus.to_laplace(self.A, form="R-DAD")
+
+        self.assertTrue(np.allclose(L_normed, expected_L_normed, rtol=1e-04))
+
+    def test_to_laplace_regularizer_kwarg(self):
+        expected_L_normed = [
+            [0, 1 / sqrt(6), 0],
+            [1 / sqrt(6), 0, 1 / sqrt(6)],
+            [0, 1 / sqrt(6), 0],
+        ]
+        L_normed = gus.to_laplace(self.A, form="R-DAD", regularizer=1.0)
+
+        self.assertTrue(np.allclose(L_normed, expected_L_normed, rtol=1e-04))
+
     def test_to_laplace_symmetric(self):
         L_normed = gus.to_laplace(self.A, form="DAD")
 
@@ -70,6 +91,14 @@ class TestToLaplace(unittest.TestCase):
     def test_to_laplace_unsuported(self):
         with self.assertRaises(TypeError):
             gus.to_laplace(self.A, form="MOM")
+
+    def test_to_laplace_unsuported_regularizer(self):
+        with self.assertRaises(TypeError):
+            gus.to_laplace(self.A, form="R-DAD", regularizer="2")
+        with self.assertRaises(TypeError):
+            gus.to_laplace(self.A, form="R-DAD", regularizer=[1, 2, 3])
+        with self.assertRaises(ValueError):
+            gus.to_laplace(self.A, form="R-DAD", regularizer=-1.0)
 
 
 class TestChecks(unittest.TestCase):
@@ -90,11 +119,6 @@ class TestChecks(unittest.TestCase):
         B = np.array([[0, 1, 0, 0], [1, 0, 1, 0], [0, 1.0, 0, 0], [1, 0, 1, 0]])
         self.assertTrue(gus.is_unweighted(B))
         self.assertFalse(gus.is_unweighted(self.A))
-
-    def test_unconnected_laplacian(self):
-        A = np.array([[0, 1, 0], [1, 0, 0], [0, 0, 0]])
-        with self.assertRaises(ValueError):
-            gus.to_laplace(A)
 
     def test_is_fully_connected(self):
         # graph where node at index [3] only connects to self

@@ -10,7 +10,7 @@ from graspy.plot import heatmap, pairplot
 import numpy as np
 from mgcpy.independence_tests.dcorr import DCorr
 from sklearn import preprocessing
-import mgcpy
+from mgcpy.independence_tests.mgc.mgc import MGC
 
 from tqdm import tqdm
 
@@ -104,8 +104,8 @@ def get(n=50):
 pows = []
 x = range(10,101,10)
 for n in x:
-    mgc = mgcpy.independence_tests.mgc.mgc()
-    power(mgc, get(n=n), paired_two_sample_transform())
+    mgc = MGC()
+    power(mgc, get(n=n)) #  paired_two_sample_transform()
     p.append(power)
 
 import matplotlib.pyplot as plt
