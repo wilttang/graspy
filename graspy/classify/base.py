@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .base import BaseClassifier
+from abc import ABC, abstractmethod
+
+from sklearn.base import BaseEstimator, ClassifierMixin
 
 
-class SparseOptimization(BaseClassifier):
+class BaseClassify(ABC, BaseEstimator, ClassifierMixin):
     """
-    Network classification algorithm using sparse optimization.
+    Base classification class.
     """
