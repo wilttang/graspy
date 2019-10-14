@@ -13,3 +13,8 @@ def test_input():
     with pytest.raises(ValueError):
         sparse_opt = SparseOpt(x, y, D)
         sparse_opt._admm(0, 0, opt_type="0")
+
+    sparse_opt = SparseOpt(x, y, D)
+    sparse_opt._admm(0, 0, opt_type="0")
+
+    assert sparse_opt == 5
