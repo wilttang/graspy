@@ -1,3 +1,3 @@
-from .sparse_optimization import SparseOptimization
+from .sparse_opt import SparseOpt
 
-__all__ = ["SparseOptimization"]
+__all__ = ["SparseOpt"]
