@@ -13,33 +13,27 @@
 # limitations under the License.
 
 import numpy as np
-from collections import Counter
+from numba import njit
 
 from .base import BaseClassify
 
 
-def _soft_threshold(x, lambda_, opt_type, nodes=None):
+@njit
+def _soft_threshold(x, lambda_, nodes=None):
     n = x.shape[0]
 
     for i in range(n):
-        if opt_type == "fused":
-            if x[i] > lambda_:
-                x[i] -= lambda_
-            elif x[i] < lambda_:
-                x[i] += lambda_
+        norm_node = _gl_penalty(x, nodes)
+        t = 1 - lambda_/norm_node
+        for j in range((nodes-1)*i, (nodes-1)*(i+1)):
+            if norm_node <= lambda_:
+                x[j] = 0
             else:
-                x[i] = 0
-        else:
-            norm_node = _gl_penalty(x, nodes)
-            t = 1 - lambda_/norm_node
-            for j in range((nodes-1)*i, (nodes-1)*(i+1)):
-                if norm_node <= lambda_:
-                    x[j] = 0
-                else:
-                    x[j] *= t
+                x[j] *= t
 
     return x
 
+@njit
 def _gl_penalty(b, nodes=None):
     for i in range(nodes):
         norm_node = np.sum([b[j] ** 2 for j in range((nodes-1)*i, (nodes-1)*(i+1))])
@@ -68,28 +62,17 @@ class SparseOpt(BaseClassify):
         self.max_iter = opt["max_iter"]
         self.conv_crit = opt["conv_crit"]
 
-    def _admm(self, omega1, omega2, G_penalty_factors=None, tol=1e-7, opt_type="", nodes=None):
-        if opt_type != "fused" or opt_type != "weights" or opt_type != "group":
-            raise ValueError("Optimization type must be fused, group, or weights")
-
+    def _admm(self, omega1, omega2, tol=1e-7, beta_start=None):
         n = self.y.size
-        if opt_type == "group":
-            D_list = self.D
-            G = len(self.D)
-        else:
-            m = self.D.shape[0]
+        m = self.D.shape[0]
 
         if not self.beta_start:
             beta = self.y
         else:
             beta = self.beta_start
 
-        q = _soft_threshold(self.y, omega1, opt_type="fused")
-        if opt_type == "group":
-            R = [q[D] for D in D_list]
-            counts = Counter(D_list)
-        else:
-            r = self.D @ q
+        q = _soft_threshold(self.y, omega1)
+        r = self.D @ q
         if np.max(np.absolute(q)) == 0:
             beta = q
             i = 0
@@ -108,19 +91,10 @@ class SparseOpt(BaseClassify):
         qk = self.q
         rk = self.r
         u = np.zeros(n)
-        if opt_type == "group":
-            v = np.zeros((n, G))
-        else:
-            v = np.zeros(m)
+        v = np.zeros(m)
         i = 0
-        phi_beta_k = 0.5*np.sum(self.y-beta) + omega1*np.sum(np.abs(beta))
-        if opt_type == "fused":
-            phi_beta_k += omega2*np.sum(np.absolute(self.D @ beta))
-        elif opt_type == "group":
-            beta2 = beta ** 2
-            phi_beta_k += np.cross(G_penalty_factors, np.array([beta2[D] for D in D_list]))
-        else:
-            phi_beta_k +=  omega2*_gl_penalty(self.D @ beta)
+        phi_beta_k = (0.5*np.sum(self.y-beta) + omega1*np.sum(np.abs(beta)) 
+                      + omega2*_gl_penalty(self.D @ beta))
         conv_crit = np.infty
         sk = np.infty
         resk = np.infty
@@ -128,35 +102,26 @@ class SparseOpt(BaseClassify):
         best_phi = phi_beta_k
 
         while (resk > tol or sk > tol) and i <= self.max_iter:
-            aux = self.y-u + self.rho*q
-            if opt_type == "group":
-                aux += np.cross(self.D, self.rho*r-v)
-                beta = aux / (1+G)*self.rho
-            else:
-                aux += self.rho*np.sum(R) - np.sum(V)
-                beta = aux / (1+3*self.rho)
+            aux = self.y-u + self.rho*q + self.rho*np.sum(R) - np.sum(V)
+            beta = aux / (1+3*self.rho)
             Dbeta = self.D @ beta
 
             # update q
-            q = _soft_threshold(beta+u/self.rho, omega1/self.rho, opt_type="fused")
+            q = _soft_threshold(beta+u/self.rho, omega1/self.rho)
 
             # update r
             Dbetavrho = Dbeta + v/self.rho
-            if opt_type == "fused":
-                r = _soft_threshold(Dbetavrho, omega2/self.rho, opt_type)
-            else:
-                r = _soft_threshold(Dbetavrho, omega2/self.rho, opt_type)
+            r = _soft_threshold(Dbetavrho, omega2/self.rho)
 
             u = u + self.rho * (beta-q)
             v = v + self.rho * (Dbeta-r)
 
             # update convergence criteria
-            phi_beta_k1 = 0.5*np.sum(self.y-beta) + omega1*np.sum(np.abs(beta))
-            if opt_type == "fused":
-                phi_beta_k1 += omega2*np.sum(np.absolute(Dbeta))
-            else:
-                phi_beta_k1 +=  omega2*_gl_penalty(self.D, nodes)
-            sk = self.rho * np.max(np.absolute(q-qk)) + np.max(np.absolute(np.cross(self.D, r-rk)))
+            phi_beta_k1 = (0.5*np.sum(self.y-beta)
+                           + omega1*np.sum(np.abs(beta))
+                           + omega2*_gl_penalty(self.D, nodes))
+            sk = (self.rho * np.max(np.absolute(q-qk)) 
+                  + np.max(np.absolute(np.cross(self.D, r-rk))))
 
             res1k = np.sqrt(np.sum(beta-q))
             res2k = np.sqrt(np.sum(Dbeta-r))
@@ -174,17 +139,11 @@ class SparseOpt(BaseClassify):
 
             i += 1
 
-        if opt_type == "fused":
-            phi_q =  0.5*np.sum(self.y-beta) + omega1*np.sum(np.abs(beta)) + omega2*np.sum(np.absolute(self.D @ beta))
-            whichm = np.argmin([phi_beta_k1, best_phi, phi_q])
-            if whichm == 1:
-                best_beta = beta
-            elif whichm == 3:
-                best_beta = q
-        else:
-            beta_q = beta * (q == 0).astype(int)
-            0.5*np.sum(self.y-beta_q) + omega1*np.sum(np.abs(beta_q)) + omega2*_gl_penalty(self.D @ beta_q)
-        whichm = np.argmin([phi_beta_k1, best_phi, beta_q])
+        beta_q = beta * (q == 0).astype(int)
+        phi_beta_q = (0.5*np.sum(self.y-beta_q)
+                      + omega1*np.sum(np.abs(beta_q))
+                      + omega2*_gl_penalty(self.D @ beta_q))
+        whichm = np.min([phi_beta_k1, best_phi, phi_beta_q])
         if whichm == 1:
             best_beta = beta
         elif whichm == 3:
@@ -198,6 +157,60 @@ class SparseOpt(BaseClassify):
         self.best_beta = best_beta
 
         return beta, q, r, i, conv_crit, best_beta
+
+    def _logistic_lasso(self, lambda1, lambda2):
+        rho = 1
+        n = self.y.size
+        p = self.x.shape[1]
+        b_derivative = lambda xbeta, b: (np.sum(-y / (1 +
+            np.exp(y * (xbeta+b)))) / n)
+        b_hessian = lambda xbeta, b: (np.sum(1 / (np.exp(-y * (xbeta+b))
+            + np.exp(y * (xbeta+b)) + 2)) / n)
+
+        grad_f = lambda xbeta, b, beta: (-np.cross(x,
+            self.y / (1 + np.exp(self.y * (xbeta+b)))) / n
+            + self.gamma*self.beta)
+        f = lambda xbeta, b, beta: (np.sum(np.log(1 + np.exp(-self.y
+            * (xbeta+b)))) / n + self.gamma/2 * np.cross(beta, beta))
+        penalty = lambda beta: (lambda1*np.sum(np.abs(beta))
+            + lambda2*_gl_penalty(self.D@beta, self.nodes))
+
+        def proximal(u, lambda_, beta_startprox=None, tol=1e-7):
+            if lambda2 > 0:
+                gl = self._admm(omega1=lambda_*lambda1,
+                    omega2=lambda_*lambda2, beta_start=beta_startprox)
+                return gl[5], gl[1], gl[2]
+            elif lambda1 > 0:
+                return np.sign(np.max(np.abs(u) - (lambda1*lambda_), 0))
+            else:
+                return u
+
+        def b_step(xbeta, b_start=0):
+            tolb = 1e-4
+            max_sb = 100
+            b_n = b_start
+            i = 0
+            b_deriv = np.inf
+            while np.abs(b_derivative) > tolb and i < max_sb:
+                b_deriv = b_deriv(xbeta, b_n)
+                b_hess = b_hessian(xbeta, b_n)
+                b_n = b_deriv/(b_hess + 1 * (np.abs(b_deriv/b_hess) > 100))
+                i += 1
+            return b_n
+
+        beta_start = np.zeros(p)
+        b_start = 0
+
+        optimal = self._fista(proximal, b_step, f, grad_f, penalty,
+                              beta_start, b_start)
+
+        return optimal
+
+    def _fista(self, proximal, b_step, f, grad_f, penalty, beta_start,
+               b_start):
+        optimal = 0
+
+        return optimal
 
     def fit(self):
         pass
