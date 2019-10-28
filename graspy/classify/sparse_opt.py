@@ -18,58 +18,23 @@ from numba import njit
 from .base import BaseClassify
 
 
-@njit
-def _soft_threshold(x, lambda_, nodes=None):
-    n = x.shape[0]
-
-    for i in range(n):
-        norm_node = _gl_penalty(x, nodes)
-        t = 1 - lambda_/norm_node
-        for j in range((nodes-1)*i, (nodes-1)*(i+1)):
-            if norm_node <= lambda_:
-                x[j] = 0
-            else:
-                x[j] *= t
-
-    return x
-
-@njit
-def _gl_penalty(b, nodes=None):
-    for i in range(nodes):
-        norm_node = np.sum([b[j] ** 2 for j in range((nodes-1)*i, (nodes-1)*(i+1))])
-        gl = np.sqrt(norm_node)
-
-    return gl
-
-
 class SparseOpt(BaseClassify):
     """
     Network classification algorithm using sparse optimization.
     """
-    def __init__(self, x, y, D, opt={}, lambda_=0, rho=0, gamma=1e-5, nodes=None):
-        self.x = x
-        self.y = y
-        self.D = D
+    def __init__(self, lambda_=0, gamma=1e-5, nodes=None):
         self.lambda_ = lambda_
-        self.rho = rho
         self.gamma = gamma
         self.nodes = nodes
-
-        # optimization specific dictionary
-        alpha_norm = np.std(x, axis=1)
-        self.beta_start = opt["beta"] * alpha_norm
-        self.b_start = opt["b_start"]
-        self.max_iter = opt["max_iter"]
-        self.conv_crit = opt["conv_crit"]
 
     def _admm(self, omega1, omega2, tol=1e-7, beta_start=None):
         n = self.y.size
         m = self.D.shape[0]
 
-        if not self.beta_start:
+        if not beta_start:
             beta = self.y
         else:
-            beta = self.beta_start
+            beta = beta_start
 
         q = _soft_threshold(self.y, omega1)
         r = self.D @ q
@@ -88,8 +53,8 @@ class SparseOpt(BaseClassify):
 
             return beta, q, r, i, conv_crit, best_beta
 
-        qk = self.q
-        rk = self.r
+        qk = q
+        rk = r
         u = np.zeros(n)
         v = np.zeros(m)
         i = 0
@@ -102,7 +67,7 @@ class SparseOpt(BaseClassify):
         best_phi = phi_beta_k
 
         while (resk > tol or sk > tol) and i <= self.max_iter:
-            aux = self.y-u + self.rho*q + self.rho*np.sum(R) - np.sum(V)
+            aux = self.y-u + self.rho*q - self.D @ (self.rho*r - v)
             beta = aux / (1+3*self.rho)
             Dbeta = self.D @ beta
 
@@ -119,8 +84,8 @@ class SparseOpt(BaseClassify):
             # update convergence criteria
             phi_beta_k1 = (0.5*np.sum(self.y-beta)
                            + omega1*np.sum(np.abs(beta))
-                           + omega2*_gl_penalty(self.D, nodes))
-            sk = (self.rho * np.max(np.absolute(q-qk)) 
+                           + omega2*_gl_penalty(self.D, self.nodes))
+            sk = (self.rho * np.max(np.absolute(q-qk))
                   + np.max(np.absolute(np.cross(self.D, r-rk))))
 
             res1k = np.sqrt(np.sum(beta-q))
@@ -159,15 +124,15 @@ class SparseOpt(BaseClassify):
         return beta, q, r, i, conv_crit, best_beta
 
     def _logistic_lasso(self, lambda1, lambda2):
-        rho = 1
+        self.rho = 1
         n = self.y.size
         p = self.x.shape[1]
-        b_derivative = lambda xbeta, b: (np.sum(-y / (1 +
-            np.exp(y * (xbeta+b)))) / n)
-        b_hessian = lambda xbeta, b: (np.sum(1 / (np.exp(-y * (xbeta+b))
-            + np.exp(y * (xbeta+b)) + 2)) / n)
+        b_derivative = lambda xbeta, b: (np.sum(-self.y / (1 +
+            np.exp(self.y * (xbeta+b)))) / n)
+        b_hessian = lambda xbeta, b: (np.sum(1 / (np.exp(-self.y * (xbeta+b))
+            + np.exp(self.y * (xbeta+b)) + 2)) / n)
 
-        grad_f = lambda xbeta, b, beta: (-np.cross(x,
+        grad_f = lambda xbeta, b, beta: (-np.cross(self.x,
             self.y / (1 + np.exp(self.y * (xbeta+b)))) / n
             + self.gamma*self.beta)
         f = lambda xbeta, b, beta: (np.sum(np.log(1 + np.exp(-self.y
@@ -208,9 +173,87 @@ class SparseOpt(BaseClassify):
 
     def _fista(self, proximal, b_step, f, grad_f, penalty, beta_start,
                b_start):
-        optimal = 0
+        xk1 = self.x
+        xk = self.x
+        criterion = np.infty
+        crit_f = np.infty
+
+        k = 0
+        tk = 0.125
+        beta_step = 0.5
+
+        xbeta = x @ x_start
+        b = b_step(xbeta, b_start)
+        optimal = [xk1, xk, criterion, crit_f, k, tk, beta_step, b]
 
         return optimal
 
-    def fit(self):
+    def _predict(self):
         pass
+
+    def fit(self, x, y, xtest):
+        self.nodes = (1 + np.sqrt(1 + 8*x.shape[1])) / 2
+        yorig = y
+        self.y = 2 * (y - np.min(y)) / (np.max(y) - np.min(y)) - 1
+
+        alpha_norm = np.std(x)
+        self.x = x / alpha_norm
+        lambda1 = self.lambda_ * self.rho / alpha_norm
+        lambda2 = self.lambda_ / alpha_norm
+        gamma = self.gamma
+        self.D = _construct_d(self.nodes)
+
+        self.beta_start = np.zeros(self.nodes*(self.nodes-1)/2)
+        self.b_start = 0
+        self.max_iter = 300
+        self.conv_crit = 1e-5
+        self.max_time = np.infty
+
+        self._logistic_lasso(lambda1, lambda2)
+        beta = self.best_beta / alpha_norm
+        b = self.best_b
+        yfit = alpha_norm * (self.x @ beta)
+        self.yfit = np.exp(yfit) / (1 + np.exp(yfit))
+        self.train_error = 1 - np.sum(np.diag(yfit)) / len(self.y)
+        self._predict()
+        yfit_test = xtest @ beta + b
+        self.yfit_test = np.exp(yfit_test) / (1 + np.exp(yfit_test))
+        self.test_error = 1 - np.sum(np.diag(yfit_test)) / len(yfit_test)
+
+        return self
+
+
+@njit
+def _soft_threshold(x, lambda_, nodes=None):
+    n = x.shape[0]
+
+    for i in range(n):
+        norm_node = _gl_penalty(x, nodes)
+        t = 1 - lambda_/norm_node
+        for j in range((nodes-1)*i, (nodes-1)*(i+1)):
+            if norm_node <= lambda_:
+                x[j] = 0
+            else:
+                x[j] *= t
+
+    return x
+
+@njit
+def _gl_penalty(b, nodes=None):
+    for i in range(nodes):
+        norm_node = np.sum([b[j] ** 2 for j in range((nodes-1)*i, (nodes-1)*(i+1))])
+        gl = np.sqrt(norm_node)
+
+    return gl
+
+
+@njit
+def _construct_d(nodes=264):
+    B = np.zeros(shape=(nodes, nodes))
+    B[np.triu_indices(nodes, k=1)] = [i * (i+1) / 2 for i in range(nodes)]
+    B = B + B.T
+    D = np.zeros(shape=(nodes*(nodes-1), nodes*(nodes-1)/2))
+    for i in range(nodes):
+        D[i*(nodes-1) + 1:(i+1)*(nodes-1) + 1, B[i, -i]] = np.diag(nodes-1)
+
+    return D
