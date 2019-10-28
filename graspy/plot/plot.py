@@ -340,6 +340,7 @@ def heatmap(
                 )
             else:
                 _plot_groups(plot, arr, inner_hier_labels, fontsize=hier_label_fontsize)
+    plt.figtext(0.99, 0.001, 'Source: rows \n Target: columns', horizontalalignment='right')
     return plot
 
 
@@ -511,6 +512,7 @@ def gridplot(
             _plot_groups(
                 plot.ax, graphs[0], inner_hier_labels, fontsize=hier_label_fontsize
             )
+    plt.figtext(0.99, 0.001, 'Source: rows \n Target: columns', horizontalalignment='right')
     return plot
 
 
