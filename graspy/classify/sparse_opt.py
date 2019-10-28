@@ -21,6 +21,47 @@ from .base import BaseClassify
 class SparseOpt(BaseClassify):
     """
     Network classification algorithm using sparse optimization.
+
+    Fits a regularized logistic regression to a set of network adjacency matrices with responses, and returns an
+    object with the classifier.The classifier fits a matrix of coefficients.
+
+    Parameters
+    ----------
+    x : ndarray
+        A matrix with the training samples, in wich each row represents the vectorized (by column order) upper
+        triangular part of a network adjacency matrix.
+    y : ndarray, [0, 1]
+        A vector containing the class labels of the training samples.
+    xtest : ndarray
+        Matrix containing the test samples, with each row representing an upper-triangular vectorized adjacency
+        matrix.
+    ytest : ndarray
+        The labels of `xtest`.
+    lambda_ : float, optional
+        Penalty parameter, by default is 0.
+    rho : float, optional
+        Penalty parameter controlling sparsity, by default is 0.
+    gamma : float, optional
+        Ridge parameter (for numerical purposes), by default is 1e-5.
+
+
+    Returns
+    -------
+    object
+        Containing the trained graph classifier:
+
+            - beta : ndarray
+                Edge coefficients vector of the regularized logistic regression solution.
+            - b : float
+                Intercept value
+            - yfit : ndarray
+                Fitted logistic regression probabilities in the train data.
+            - ypred : ndarray
+                Predicted class for the test samples
+            - train_error : float
+                Percentage of train samples that are misclassified.
+            - test_error : float
+                Percentage of test samples that are misclassified.
     """
     def __init__(self, lambda_=0, gamma=1e-5, nodes=None):
         self.lambda_ = lambda_
